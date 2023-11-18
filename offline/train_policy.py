@@ -152,6 +152,60 @@ def train(dict_cfg: DictConfig):
     print("v2: ", v2)
     print("v3: ", v3)
 
+    import torch.nn as nn
+    class Policy(nn.Module):
+        def __init__(self):
+            super().__init__()
+            action_dim = 2
+            self.policy = quasimetric_rl.modules.utils.MLP(len(state1), 2*action_dim, hidden_sizes=(256, 256))
+
+        def forward(self, obs) -> torch.Tensor:
+            ac_pred = self.policy(obs)
+            ac_mean, ac_logstd = ac_pred.chunk(2, dim=-1)
+
+            return ac_mean, ac_logstd
+        
+    policy = Policy().to(device)
+    optim = torch.optim.Adam(policy.parameters(), lr=1e-3)
+    num_total_epochs = 5
+    for epoch in range(num_total_epochs):
+        epoch_desc = f"Train epoch {epoch:05d}/{num_total_epochs:05d}"
+        for it, (data, data_info) in enumerate(tqdm(trainer.iter_training_data(), total=trainer.num_batches, desc=epoch_desc)):
+            observations = data.observations
+            actions = data.actions
+            next_observations = data.next_observations
+            future_observations = data.future_observations # goals
+
+            ac_mean, ac_logstd = policy(observations)
+            ac_std = torch.exp(ac_logstd)
+            ac_dist = torch.distributions.Normal(loc=ac_mean,scale=ac_std)
+            log_prob = ac_dist.log_prob(actions).sum(dim=-1)
+
+            temperature = 3
+            with torch.no_grad():
+                v_obs = trainer.agent.critics[0](observations, future_observations)
+                v_next_obs = trainer.agent.critics[0](next_observations, future_observations)
+                adv = v_next_obs - v_obs
+                exp_adv = torch.exp(adv * temperature)
+                exp_adv = torch.min(exp_adv, torch.ones_like(exp_adv) * 100)
+
+            # print("Computed ac_mean", ac_mean[0])
+            # print("Computed ac_logstd", ac_logstd[0])
+            # print("Computed ac_std", ac_std[0])
+            # print("True action", actions[0])
+            # print("Computed log_prob", log_prob[0])
+            # print("Computed v_obs", v_obs[0])
+            # print("Computed v_next_obs", v_next_obs[0])
+            # print("Computed adv", adv[0])
+
+            scaled_log_prob = log_prob * exp_adv
+            loss = -scaled_log_prob.mean()
+            optim.zero_grad()
+            loss.backward()
+            optim.step()
+            print("loss: ", loss.item())
+
+
 
 if __name__ == '__main__':
     if 'MUJOCO_GL' not in os.environ:
