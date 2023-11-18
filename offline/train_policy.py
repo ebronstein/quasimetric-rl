@@ -135,54 +135,22 @@ def train(dict_cfg: DictConfig):
     else:
         start_epoch, start_it = 0, 0
 
-
-    # step counter to keep track of when to save
-    step_counter = StepsCounter(
-        alert_intervals=dict(
-            log=cfg.log_steps,
-            save=cfg.save_steps,
-        ),
-    )
-    num_total_epochs = int(np.ceil(cfg.total_optim_steps / trainer.num_batches))
-
-    # Training loop
-    optim_steps = 0
-
-    def log_tensorboard(optim_steps, info: InfoT, prefix: str):  # logging helper
-        for k, v in info.items():
-            if isinstance(v, Mapping):
-                log_tensorboard(optim_steps, v, prefix=f"{prefix}{k}/")
-                continue
-            if isinstance(v, torch.Tensor):
-                v = v.mean().item()
-            writer.add_scalar(f"{prefix}{k}", v, optim_steps)
-
-    save(0, 0)
-    if start_epoch < num_total_epochs:
-        for epoch in range(num_total_epochs):
-            epoch_desc = f"Train epoch {epoch:05d}/{num_total_epochs:05d}"
-            for it, (data, data_info) in enumerate(tqdm(trainer.iter_training_data(), total=trainer.num_batches, desc=epoch_desc)):
-                step_counter.update_then_record_alerts()
-                optim_steps += 1
-
-                if (epoch, it) <= (start_epoch, start_it):
-                    continue  # fast forward
-                else:
-                    iter_t0 = time.time()
-                    train_info = trainer.train_step(data)
-                    print(train_info)
-                    iter_time = time.time() - iter_t0
-
-                # if step_counter.alerts.save:
-                #     save(epoch, it)
-
-                if step_counter.alerts.log:
-                    log_tensorboard(optim_steps, data_info, 'data/')
-                    log_tensorboard(optim_steps, train_info, 'train_')
-                    writer.add_scalar("train/iter_time", iter_time, optim_steps)
-
-    save(num_total_epochs, 0, suffix='final')
-    open(cfg.completion_file, 'a').close()
+    ### POLICY EXTRACTION CODE GOES HERE.
+    # We have access to trainer.
+    state1 = dataset.get_observations(0).to(device)
+    state2 = dataset.get_observations(5).to(device)
+    state3 = dataset.get_observations(10).to(device)
+    print("state1: ", state1)
+    print("state2: ", state2)
+    print("state3: ", state3)
+    v0 = trainer.agent.critics[0](state1, state1)
+    v1 = trainer.agent.critics[0](state1, state2)
+    v2 = trainer.agent.critics[0](state2, state3)
+    v3 = trainer.agent.critics[0](state1, state3)
+    print("v0: ", v0)
+    print("v1: ", v1)
+    print("v2: ", v2)
+    print("v3: ", v3)
 
 
 if __name__ == '__main__':
