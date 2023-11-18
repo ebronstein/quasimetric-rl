@@ -135,112 +135,54 @@ def train(dict_cfg: DictConfig):
     else:
         start_epoch, start_it = 0, 0
 
-    ### POLICY EXTRACTION CODE GOES HERE.
-    # We have access to trainer.
-    state1 = dataset.get_observations(0).to(device)
-    state2 = dataset.get_observations(5).to(device)
-    state3 = dataset.get_observations(10).to(device)
-    print("state1: ", state1)
-    print("state2: ", state2)
-    print("state3: ", state3)
-    v0 = trainer.agent.critics[0](state1, state1)
-    v1 = trainer.agent.critics[0](state1, state2)
-    v2 = trainer.agent.critics[0](state2, state3)
-    v3 = trainer.agent.critics[0](state1, state3)
-    print("v0: ", v0)
-    print("v1: ", v1)
-    print("v2: ", v2)
-    print("v3: ", v3)
 
-    indicies = np.arange(10000)
+    # step counter to keep track of when to save
+    step_counter = StepsCounter(
+        alert_intervals=dict(
+            log=cfg.log_steps,
+            save=cfg.save_steps,
+        ),
+    )
+    num_total_epochs = int(np.ceil(cfg.total_optim_steps / trainer.num_batches))
 
-    random_states = dataset.get_observations(np.random.randint(dataset.__len__(), size=10000)).numpy()
-    random_xy = random_states[:, :2]
-    # plot a scatter plot of the random states
-    import matplotlib.pyplot as plt
-    plt.scatter(random_xy[:, 0], random_xy[:, 1])
-    plt.savefig("random_states.png")
-    plt.close()
+    # Training loop
+    optim_steps = 0
 
+    def log_tensorboard(optim_steps, info: InfoT, prefix: str):  # logging helper
+        for k, v in info.items():
+            if isinstance(v, Mapping):
+                log_tensorboard(optim_steps, v, prefix=f"{prefix}{k}/")
+                continue
+            if isinstance(v, torch.Tensor):
+                v = v.mean().item()
+            writer.add_scalar(f"{prefix}{k}", v, optim_steps)
 
-    for i in range(20):
-        goal = dataset.get_observations(np.random.randint(dataset.__len__())).to(device)
-        import matplotlib.pyplot as plt
-        def plot_value():
-            xy_array = np.meshgrid(np.linspace(0.5, 3.2, 30), np.linspace(0.5, 3.2, 30))
-            x, y = xy_array
+    save(0, 0)
+    if start_epoch < num_total_epochs:
+        for epoch in range(num_total_epochs):
+            epoch_desc = f"Train epoch {epoch:05d}/{num_total_epochs:05d}"
+            for it, (data, data_info) in enumerate(tqdm(trainer.iter_training_data(), total=trainer.num_batches, desc=epoch_desc)):
+                step_counter.update_then_record_alerts()
+                optim_steps += 1
 
-            base_observation = np.copy(dataset.get_observations(0).cpu().detach().numpy())
-            base_observations = np.tile(base_observation, (x.shape[0], x.shape[1], 1))
-            base_observations[:, :, 0] = x
-            base_observations[:, :, 1] = y
+                if (epoch, it) <= (start_epoch, start_it):
+                    continue  # fast forward
+                else:
+                    iter_t0 = time.time()
+                    train_info = trainer.train_step(data)
+                    print(train_info)
+                    iter_time = time.time() - iter_t0
 
-            base_observations = torch.from_numpy(base_observations).to(device)
-            values = trainer.agent.critics[0](base_observations, goal[None, None]).cpu().detach().numpy()
+                # if step_counter.alerts.save:
+                #     save(epoch, it)
 
-            values[0:-5, 5:-5] = 0
-            # values[goal[0], goal[1]] = 100
+                if step_counter.alerts.log:
+                    log_tensorboard(optim_steps, data_info, 'data/')
+                    log_tensorboard(optim_steps, train_info, 'train_')
+                    writer.add_scalar("train/iter_time", iter_time, optim_steps)
 
-            mesh = plt.pcolormesh(x, y, values, cmap='viridis')
-            plt.colorbar(mesh)
-            plt.savefig(f"value{i}.png")
-            plt.close()
-        plot_value()
-    
-
-    import torch.nn as nn
-    class Policy(nn.Module):
-        def __init__(self):
-            super().__init__()
-            action_dim = 2
-            self.policy = quasimetric_rl.modules.utils.MLP(len(state1), 2*action_dim, hidden_sizes=(256, 256))
-
-        def forward(self, obs) -> torch.Tensor:
-            ac_pred = self.policy(obs)
-            ac_mean, ac_logstd = ac_pred.chunk(2, dim=-1)
-
-            return ac_mean, ac_logstd
-        
-    policy = Policy().to(device)
-    optim = torch.optim.Adam(policy.parameters(), lr=1e-3)
-    num_total_epochs = 5
-    for epoch in range(num_total_epochs):
-        epoch_desc = f"Train epoch {epoch:05d}/{num_total_epochs:05d}"
-        for it, (data, data_info) in enumerate(tqdm(trainer.iter_training_data(), total=trainer.num_batches, desc=epoch_desc)):
-            observations = data.observations
-            actions = data.actions
-            next_observations = data.next_observations
-            future_observations = data.future_observations # goals
-
-            ac_mean, ac_logstd = policy(observations)
-            ac_std = torch.exp(ac_logstd)
-            ac_dist = torch.distributions.Normal(loc=ac_mean,scale=ac_std)
-            log_prob = ac_dist.log_prob(actions).sum(dim=-1)
-
-            temperature = 3
-            with torch.no_grad():
-                v_obs = trainer.agent.critics[0](observations, future_observations)
-                v_next_obs = trainer.agent.critics[0](next_observations, future_observations)
-                adv = v_next_obs - v_obs
-                exp_adv = torch.exp(adv * temperature)
-                exp_adv = torch.min(exp_adv, torch.ones_like(exp_adv) * 100)
-
-            # print("Computed ac_mean", ac_mean[0])
-            # print("Computed ac_logstd", ac_logstd[0])
-            # print("Computed ac_std", ac_std[0])
-            # print("True action", actions[0])
-            # print("Computed log_prob", log_prob[0])
-            # print("Computed v_obs", v_obs[0])
-            # print("Computed v_next_obs", v_next_obs[0])
-            # print("Computed adv", adv[0])
-
-            scaled_log_prob = log_prob * exp_adv
-            loss = -scaled_log_prob.mean()
-            optim.zero_grad()
-            loss.backward()
-            optim.step()
-            print("loss: ", loss.item())
-
+    save(num_total_epochs, 0, suffix='final')
+    open(cfg.completion_file, 'a').close()
 
 
 if __name__ == '__main__':
