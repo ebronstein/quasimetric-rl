@@ -20,12 +20,12 @@ import torch.multiprocessing
 
 import quasimetric_rl
 from quasimetric_rl import utils, pdb_if_DEBUG, FLAGS
-
-from quasimetric_rl.utils.steps_counter import StepsCounter
-from quasimetric_rl.modules import InfoT
 from quasimetric_rl.base_conf import BaseConf
 
 from .trainer import Trainer
+from .policy import Policy, save_policy, load_policy
+from .eval_utils import evaluate_with_trajectories
+from .d4rl import make_d4rl_env
 
 
 @utils.singleton
@@ -34,6 +34,7 @@ class Conf(BaseConf):
     output_base_dir: str = attrs.field(default=os.path.join(os.path.dirname(__file__), 'results'))
 
     resume_if_possible: bool = True
+    eval_only: bool = False
 
     env: quasimetric_rl.data.Dataset.Conf = quasimetric_rl.data.Dataset.Conf()
 
@@ -50,24 +51,31 @@ cs = hydra.core.config_store.ConfigStore.instance()
 cs.store(name='config', node=Conf())
 
 
-@pdb_if_DEBUG
-@hydra.main(version_base=None, config_name="config")
-def train(dict_cfg: DictConfig):
-    print("Train called")
-    cfg: Conf = Conf.from_DictConfig(dict_cfg)
-    writer = cfg.setup_for_experiment()  # checking & setup logging
-    cfg.output_dir = os.path.join(cfg.output_base_dir, 'policy')
-    input_dir = os.path.join(cfg.output_base_dir, 'd4rl_maze2d-umaze-v1/iqe(dim=2048,components=64)_dyn=0.1_2critic_seed=60912')
-    print(input_dir)
-
-    ckpts = {}  # (epoch, iter) -> path
-    ckpt_paths = glob.glob(os.path.join(glob.escape(input_dir), 'checkpoint_*.pth'))
-    print(ckpt_paths)
+def get_checkpoint_dict(dir):
+    ckpts = {} # (epoch, iter) -> path
+    ckpt_paths = glob.glob(os.path.join(glob.escape(dir), 'checkpoint_*.pth'))
+    print(f"loading checkpoints from {ckpt_paths}")
+    
     for ckpt in sorted(ckpt_paths):
         epoch, it = os.path.basename(ckpt).rsplit('.', 1)[0].split('_')[1:3]
         epoch, it = int(epoch), int(it)
         ckpts[epoch, it] = ckpt
     print("ckpts: ", ckpts)
+    
+    return ckpts
+
+
+@pdb_if_DEBUG
+@hydra.main(version_base=None, config_name="config")
+def train_and_eval(dict_cfg: DictConfig):
+    print("Train called")
+    cfg: Conf = Conf.from_DictConfig(dict_cfg)
+    writer = cfg.setup_for_experiment()  # checking & setup logging
+    cfg.output_dir = os.path.join(cfg.output_base_dir, 'policy')
+    
+    input_dir = os.path.join(cfg.output_base_dir, 'd4rl_maze2d-umaze-v1/iqe(dim=2048,components=64)_dyn=0.1_2critic_seed=60912')
+    print(input_dir)
+    ckpts = get_checkpoint_dict(input_dir)
 
     dataset = cfg.env.make()
 
@@ -102,7 +110,7 @@ def train(dict_cfg: DictConfig):
     )
 
     # save, load, and resume
-    def save(epoch, it, *, suffix=None, extra=dict()):
+    def save_trainer(epoch, it, *, suffix=None, extra=dict()):
         desc = f"{epoch:05d}_{it:05d}"
         if suffix is not None:
             desc += f'_{suffix}'
@@ -119,7 +127,7 @@ def train(dict_cfg: DictConfig):
         relpath = os.path.join('.', os.path.relpath(fullpath, os.path.dirname(__file__)))
         logging.info(f"Checkpointed to {relpath}")
 
-    def load(ckpt):
+    def load_trainer(ckpt):
         state_dicts = torch.load(ckpt, map_location='cpu')
         trainer.agent.load_state_dict(state_dicts['agent'])
         trainer.losses.load_state_dict(state_dicts['losses'])
@@ -129,7 +137,7 @@ def train(dict_cfg: DictConfig):
     if cfg.resume_if_possible and len(ckpts) > 0:
         start_epoch, start_it = max(ckpts.keys())
         logging.info(f'Load from existing checkpoint: {ckpts[start_epoch, start_it]}')
-        load(ckpts[start_epoch, start_it])
+        load_trainer(ckpts[start_epoch, start_it])
         logging.info(f'Fast forward to epoch={start_epoch} iter={start_it}')
         start_epoch, start_it = 0, 0 # Start training from scratch.
     else:
@@ -151,60 +159,90 @@ def train(dict_cfg: DictConfig):
     print("v1: ", v1)
     print("v2: ", v2)
     print("v3: ", v3)
-
-    import torch.nn as nn
-    class Policy(nn.Module):
-        def __init__(self):
-            super().__init__()
-            action_dim = 2
-            self.policy = quasimetric_rl.modules.utils.MLP(len(state1), 2*action_dim, hidden_sizes=(256, 256))
-
-        def forward(self, obs) -> torch.Tensor:
-            ac_pred = self.policy(obs)
-            ac_mean, ac_logstd = ac_pred.chunk(2, dim=-1)
-
-            return ac_mean, ac_logstd
         
-    policy = Policy().to(device)
-    optim = torch.optim.Adam(policy.parameters(), lr=1e-3)
-    num_total_epochs = 5
-    for epoch in range(num_total_epochs):
-        epoch_desc = f"Train epoch {epoch:05d}/{num_total_epochs:05d}"
-        for it, (data, data_info) in enumerate(tqdm(trainer.iter_training_data(), total=trainer.num_batches, desc=epoch_desc)):
-            observations = data.observations
-            actions = data.actions
-            next_observations = data.next_observations
-            future_observations = data.future_observations # goals
+    ### learning a policy ###
+    if not cfg.eval_only:
+        
+        policy = Policy(len(state1), device)
+        optim = torch.optim.Adam(policy.parameters(), lr=1e-3)
+        
+        num_total_epochs = 20
+        for epoch in range(tqdm(num_total_epochs)):
+            epoch_desc = f"Train epoch {epoch:05d}/{num_total_epochs:05d}"
+            for it, (data, data_info) in enumerate(trainer.iter_training_data(), total=trainer.num_batches, desc=epoch_desc):
+                observations = data.observations
+                actions = data.actions
+                next_observations = data.next_observations
+                future_observations = data.future_observations # goals
 
-            ac_mean, ac_logstd = policy(observations)
-            ac_std = torch.exp(ac_logstd)
-            ac_dist = torch.distributions.Normal(loc=ac_mean,scale=ac_std)
-            log_prob = ac_dist.log_prob(actions).sum(dim=-1)
+                ac_mean, ac_logstd = policy(observations)
+                ac_std = torch.exp(ac_logstd)
+                ac_dist = torch.distributions.Normal(loc=ac_mean,scale=ac_std)
+                log_prob = ac_dist.log_prob(actions).sum(dim=-1)
 
-            temperature = 3
-            with torch.no_grad():
-                v_obs = trainer.agent.critics[0](observations, future_observations)
-                v_next_obs = trainer.agent.critics[0](next_observations, future_observations)
-                adv = v_next_obs - v_obs
-                exp_adv = torch.exp(adv * temperature)
-                exp_adv = torch.min(exp_adv, torch.ones_like(exp_adv) * 100)
+                temperature = 3
+                with torch.no_grad():
+                    v_obs = trainer.agent.critics[0](observations, future_observations)
+                    v_next_obs = trainer.agent.critics[0](next_observations, future_observations)
+                    adv = v_next_obs - v_obs
+                    exp_adv = torch.exp(adv * temperature)
+                    exp_adv = torch.min(exp_adv, torch.ones_like(exp_adv) * 100)
 
-            # print("Computed ac_mean", ac_mean[0])
-            # print("Computed ac_logstd", ac_logstd[0])
-            # print("Computed ac_std", ac_std[0])
-            # print("True action", actions[0])
-            # print("Computed log_prob", log_prob[0])
-            # print("Computed v_obs", v_obs[0])
-            # print("Computed v_next_obs", v_next_obs[0])
-            # print("Computed adv", adv[0])
+                # print("Computed ac_mean", ac_mean[0])
+                # print("Computed ac_logstd", ac_logstd[0])
+                # print("Computed ac_std", ac_std[0])
+                # print("True action", actions[0])
+                # print("Computed log_prob", log_prob[0])
+                # print("Computed v_obs", v_obs[0])
+                # print("Computed v_next_obs", v_next_obs[0])
+                # print("Computed adv", adv[0])
 
-            scaled_log_prob = log_prob * exp_adv
-            loss = -scaled_log_prob.mean()
-            optim.zero_grad()
-            loss.backward()
-            optim.step()
-            print("loss: ", loss.item())
+                scaled_log_prob = log_prob * exp_adv
+                loss = -scaled_log_prob.mean()
+                optim.zero_grad()
+                loss.backward()
+                optim.step()
+                print("loss: ", loss.item())
+        
+            ### save the learned policy ###
+            save_policy(policy, cfg.output_dir, epoch, it)
+    
+    ### evaluate the learned policy ###
+    eval(cfg, state_size=len(state1), device=device)
 
+    
+def eval(cfg, state_size, device):
+    # make env
+    env_name = cfg.env.name
+    env = make_d4rl_env(env_name)
+    
+    # load the learned policy
+    checkpoint_dict = get_checkpoint_dict(cfg.output_dir)  
+    print(f"found policy checkpoints: {checkpoint_dict}")
+    checkpoint = checkpoint_dict[max(checkpoint_dict.keys())]  # there is only one checkpoint
+    
+    for epoch_iter in sorted(checkpoint_dict.keys()):
+        
+        checkpoint = checkpoint_dict[epoch_iter]
+        epoch, iter = epoch_iter
+    
+        policy = load_policy(checkpoint, state_size, device)
+        policy.eval()
+        
+        # evaluate
+        stats, trajs = evaluate_with_trajectories(
+            policy_fn=policy.get_action,
+            env=env,
+            num_episodes=10,
+        )
+        
+        metrics = {}
+        metrics['average_return'] = np.mean([np.sum(t['reward']) for t in trajs])
+        metrics['average_traj_length'] = np.mean([len(t['reward']) for t in trajs])
+        metrics['average_normalizd_return'] = np.mean(
+            [env.get_normalized_score(np.sum(t['reward'])) for t in trajs]
+        )
+        print(epoch, metrics)
 
 
 if __name__ == '__main__':
@@ -214,4 +252,4 @@ if __name__ == '__main__':
     # set up some hydra flags before parsing
     os.environ['HYDRA_FULL_ERROR'] = str(int(FLAGS.DEBUG))
 
-    train()
+    train_and_eval()
