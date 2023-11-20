@@ -152,29 +152,40 @@ def train(dict_cfg: DictConfig):
     print("v2: ", v2)
     print("v3: ", v3)
 
-    breakpoint()
-
     indicies = np.arange(10000)
 
-    goal = state1
+    random_states = dataset.get_observations(np.random.randint(dataset.__len__(), size=10000)).numpy()
+    random_xy = random_states[:, :2]
+    # plot a scatter plot of the random states
     import matplotlib.pyplot as plt
-    def plot_value():
-        xy_array = np.meshgrid(np.linspace(0.5, 3.2, 30), np.linspace(0.5, 3.2, 30))
-        x, y = xy_array
+    plt.scatter(random_xy[:, 0], random_xy[:, 1])
+    plt.savefig("random_states.png")
+    plt.close()
 
-        base_observation = np.copy(dataset.get_observations(0).cpu().detach().numpy())
-        base_observations = np.tile(base_observation, (x.shape[0], x.shape[1], 1))
-        base_observations[:, :, 0] = x
-        base_observations[:, :, 1] = y
 
-        base_observations = torch.from_numpy(base_observations).to(device)
-        values = trainer.agent.critics[0](base_observations, goal[None, None]).cpu().detach().numpy()
+    for i in range(20):
+        goal = dataset.get_observations(np.random.randint(dataset.__len__())).to(device)
+        import matplotlib.pyplot as plt
+        def plot_value():
+            xy_array = np.meshgrid(np.linspace(0.5, 3.2, 30), np.linspace(0.5, 3.2, 30))
+            x, y = xy_array
 
-        mesh = plt.pcolormesh(x, y, values, cmap='viridis')
-        plt.colorbar(mesh)
-        plt.savefig("value.png")
-        plt.close()
-    plot_value()
+            base_observation = np.copy(dataset.get_observations(0).cpu().detach().numpy())
+            base_observations = np.tile(base_observation, (x.shape[0], x.shape[1], 1))
+            base_observations[:, :, 0] = x
+            base_observations[:, :, 1] = y
+
+            base_observations = torch.from_numpy(base_observations).to(device)
+            values = trainer.agent.critics[0](base_observations, goal[None, None]).cpu().detach().numpy()
+
+            values[0:-5, 5:-5] = 0
+            # values[goal[0], goal[1]] = 100
+
+            mesh = plt.pcolormesh(x, y, values, cmap='viridis')
+            plt.colorbar(mesh)
+            plt.savefig(f"value{i}.png")
+            plt.close()
+        plot_value()
     
 
     import torch.nn as nn
