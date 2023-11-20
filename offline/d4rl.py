@@ -2,6 +2,8 @@ import d4rl
 import numpy as np
 import gym
 
+from .eval_utils import VideoRecorder
+
 
 class TruncationWrapper(gym.Wrapper):
     """d4rl only supports the old gym API, where env.step returns a 4-tuple without
@@ -31,5 +33,21 @@ def get_d4rl_dataset(env):
         dones=dataset["terminals"].astype(np.float32),
     )
     
-def make_d4rl_env(env_name):
-    return TruncationWrapper(gym.make(env_name))
+def make_d4rl_env(
+    env_name: str,
+    save_video: bool,
+    save_video_dir: str,
+    save_video_prefix: str,
+    ):
+    
+    env = gym.make(env_name)
+    env = TruncationWrapper(env)
+    if save_video:
+        env = VideoRecorder(
+            env,
+            save_folder=save_video_dir,
+            save_prefix=save_video_prefix,
+            goal_conditioned=False,
+        )
+
+    return env

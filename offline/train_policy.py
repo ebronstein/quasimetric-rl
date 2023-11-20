@@ -24,7 +24,7 @@ from quasimetric_rl.base_conf import BaseConf
 
 from .trainer import Trainer
 from .policy import Policy, save_policy, load_policy
-from .eval_utils import evaluate_with_trajectories
+from .eval_utils import evaluate_with_trajectories, load_recorded_video
 from .d4rl import make_d4rl_env
 
 
@@ -214,7 +214,13 @@ def train_and_eval(dict_cfg: DictConfig):
 def eval(cfg, state_size, device):
     # make env
     env_name = cfg.env.name
-    env = make_d4rl_env(env_name)
+    save_video = True
+    env = make_d4rl_env(
+        env_name,
+        save_video=save_video,
+        save_video_dir=os.path.join(cfg.output_dir, 'videos'),
+        save_video_prefix='eval',
+    )
     
     # load the learned policy
     checkpoint_dict = get_checkpoint_dict(cfg.output_dir)  
@@ -230,6 +236,11 @@ def eval(cfg, state_size, device):
         policy.eval()
         
         # evaluate
+        if save_video:
+            env.start_recording(
+                num_episodes=8,
+                num_videos_per_row=4,
+            )
         stats, trajs = evaluate_with_trajectories(
             policy_fn=policy.get_action,
             env=env,
@@ -243,6 +254,9 @@ def eval(cfg, state_size, device):
             [env.get_normalized_score(np.sum(t['reward'])) for t in trajs]
         )
         print(epoch, metrics)
+        
+        if save_video:
+            eval_video = load_recorded_video(video_path=env.current_save_path)
 
 
 if __name__ == '__main__':
