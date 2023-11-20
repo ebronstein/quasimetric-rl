@@ -9,6 +9,8 @@ __pycache__
 */**/**/**/**/*.pyc
 .mypy_cache
 
+eli_results/
+
 # IPython notebook checkpoints
 .ipynb_checkpoints
 
