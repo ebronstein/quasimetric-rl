@@ -95,11 +95,31 @@ def load_episodes_maze2d(name):
     )
 
 
-for name in ['maze2d-umaze-v1', 'maze2d-medium-v1', 'maze2d-large-v1']:
-    register_offline_env(
-        'd4rl', name,
-        create_env_fn=functools.partial(load_environment, name),
-        load_episodes_fn=functools.partial(load_episodes_maze2d, name),
+def load_episodes(name):
+    env = load_environment(name)
+    yield from convert_dict_to_EpisodeData_iter(
+        sequence_dataset(
+            env,
+            env.get_dataset(),
+        ),
     )
 
 
+for name in [
+    'maze2d-umaze-v1',
+    'maze2d-medium-v1',
+    'maze2d-large-v1',
+    'halfcheetah-expert-v2',
+    'halfcheetah-random-v2',
+    'halfcheetah-medium-v2',
+]:
+    if 'maze2d' in name:
+        load_episodes_fn = load_episodes_maze2d
+    else:
+        load_episodes_fn = load_episodes
+    register_offline_env(
+        'd4rl',
+        name,
+        create_env_fn=functools.partial(load_environment, name),
+        load_episodes_fn=functools.partial(load_episodes_fn, name),
+    )
