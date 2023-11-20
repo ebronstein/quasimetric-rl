@@ -225,3 +225,22 @@ def load_recorded_video(
 
     return wandb.Video(video, fps=20)
 
+
+def _recursive_flatten_dict(d: dict):
+    keys, values = [], []
+    for key, value in d.items():
+        if isinstance(value, dict):
+            sub_keys, sub_values = _recursive_flatten_dict(value)
+            keys += [f"{key}/{k}" for k in sub_keys]
+            values += sub_values
+        else:
+            keys.append(key)
+            values.append(value)
+    return keys, values
+
+
+class WandBLogger(object):
+    def log(self, data: dict, step: int = None):
+        data_flat = _recursive_flatten_dict(data)
+        data = {k: v for k, v in zip(*data_flat)}
+        wandb.log(data, step=step)

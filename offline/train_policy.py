@@ -24,8 +24,14 @@ from quasimetric_rl.base_conf import BaseConf
 
 from .trainer import Trainer
 from .policy import Policy, save_policy, load_policy
-from .eval_utils import evaluate_with_trajectories, load_recorded_video
+from .eval_utils import evaluate_with_trajectories, load_recorded_video, WandBLogger
 from .d4rl import make_d4rl_env
+
+import wandb
+wandb.init(
+    project="convex-final", 
+    sync_tensorboard=True,
+)
 
 
 @utils.singleton
@@ -212,6 +218,9 @@ def train_and_eval(dict_cfg: DictConfig):
 
     
 def eval(cfg, state_size, device):
+    # logger
+    wandb_logger = WandBLogger()
+    
     # make env
     env_name = cfg.env.name
     save_video = True
@@ -254,9 +263,11 @@ def eval(cfg, state_size, device):
             [env.get_normalized_score(np.sum(t['reward'])) for t in trajs]
         )
         print(epoch, metrics)
+        wandb_logger.log({"evaluation": metrics}, step=epoch)
         
         if save_video:
             eval_video = load_recorded_video(video_path=env.current_save_path)
+            wandb_logger.log({"evaluation/video": eval_video}, step=epoch)
 
 
 if __name__ == '__main__':
