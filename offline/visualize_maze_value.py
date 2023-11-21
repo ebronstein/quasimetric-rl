@@ -1,7 +1,6 @@
 from typing import cast
 import os
 import glob
-import attrs
 import logging
 
 import hydra
@@ -9,7 +8,6 @@ import hydra.types
 import hydra.core.config_store
 from omegaconf import DictConfig
 
-from tqdm.auto import tqdm
 import gym
 import matplotlib.pyplot as plt
 import numpy as np
