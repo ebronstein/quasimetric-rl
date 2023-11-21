@@ -98,6 +98,34 @@ class BaseConf(abc.ABC):
     def from_DictConfig(cls, cfg: DictConfig) -> 'BaseConf':
         return OmegaConf.to_container(cfg, structured_config_mode=SCMode.INSTANTIATE)
 
+    def set_output_folder(self) -> None:
+        specs = [
+            self.agent.quasimetric_critic.model.quasimetric_model.quasimetric_head_spec,
+            f'dyn={self.agent.quasimetric_critic.losses.latent_dynamics.weight:g}',
+        ]
+        if self.agent.num_critics > 1:
+            specs.append(f'{self.agent.num_critics}critic')
+        if self.agent.actor is not None:
+            aspecs = []
+            if self.agent.actor.losses.min_dist.add_goal_as_future_state:
+                aspecs.append('goal=Rand+Future')
+            else:
+                aspecs.append('goal=Rand')
+            if self.agent.actor.losses.min_dist.adaptive_entropy_regularizer:
+                aspecs.append('ent')
+            if self.agent.actor.losses.behavior_cloning.weight > 0:
+                aspecs.append(f'BC={self.agent.actor.losses.behavior_cloning.weight:g}')
+            specs.append('actor(' + ','.join(aspecs) + ')')
+        specs.append(
+            f'seed={self.seed}',
+        )
+        if self.output_folder_suffix is not None:
+            specs.append(self.output_folder_suffix)
+        self.output_folder = os.path.join(
+            f'{self.env.kind}_{self.env.name}',
+            '_'.join(specs),
+        )
+
     def setup_for_experiment(self) -> SummaryWriter:
         r"""
         1. Finalize conf fields
@@ -110,32 +138,7 @@ class BaseConf(abc.ABC):
             raise RuntimeError('setup_for_experiment() can only be called once')
 
         if self.output_folder is None:
-            specs = [
-                self.agent.quasimetric_critic.model.quasimetric_model.quasimetric_head_spec,
-                f'dyn={self.agent.quasimetric_critic.losses.latent_dynamics.weight:g}',
-            ]
-            if self.agent.num_critics > 1:
-                specs.append(f'{self.agent.num_critics}critic')
-            if self.agent.actor is not None:
-                aspecs = []
-                if self.agent.actor.losses.min_dist.add_goal_as_future_state:
-                    aspecs.append('goal=Rand+Future')
-                else:
-                    aspecs.append('goal=Rand')
-                if self.agent.actor.losses.min_dist.adaptive_entropy_regularizer:
-                    aspecs.append('ent')
-                if self.agent.actor.losses.behavior_cloning.weight > 0:
-                    aspecs.append(f'BC={self.agent.actor.losses.behavior_cloning.weight:g}')
-                specs.append('actor(' + ','.join(aspecs) + ')')
-            specs.append(
-                f'seed={self.seed}',
-            )
-            if self.output_folder_suffix is not None:
-                specs.append(self.output_folder_suffix)
-            self.output_folder = os.path.join(
-                f'{self.env.kind}_{self.env.name}',
-                '_'.join(specs),
-            )
+            self.set_output_folder()
         assert os.path.exists(self.output_base_dir)
         self.output_dir = os.path.join(self.output_base_dir, self.output_folder)
         utils.mkdir(self.output_dir)
