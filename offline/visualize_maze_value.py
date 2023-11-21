@@ -28,11 +28,6 @@ from .trainer import Trainer
 from .main import Conf
 
 
-# @attrs.define(kw_only=True)
-# class VizConf(Conf):
-#     input_dir: str
-
-
 cs = hydra.core.config_store.ConfigStore.instance()
 cs.store(name="config", node=Conf())
 
@@ -42,7 +37,6 @@ def get_checkpoint_paths(input_dir: str):
     ckpt_paths = glob.glob(
         os.path.join(glob.escape(input_dir), "checkpoint_*.pth")
     )
-    print(ckpt_paths)
     for ckpt in sorted(ckpt_paths):
         epoch, it = os.path.basename(ckpt).rsplit(".", 1)[0].split("_")[1:3]
         epoch, it = int(epoch), int(it)
@@ -62,13 +56,26 @@ def load(ckpt: str, trainer: Trainer):
 
 @pdb_if_DEBUG
 @hydra.main(version_base=None, config_name="config")
-def visualize_value(dict_cfg: DictConfig):
+def visualize_value_from_dict_cfg(dict_cfg: DictConfig):
     cfg: Conf = Conf.from_DictConfig(dict_cfg)
     # Set the output folder to get the output visualization directory.
     cfg.set_output_folder()
-    input_dir = os.path.join(cfg.output_base_dir, cfg.output_folder)
-    output_viz_dir = os.path.join(input_dir, "value_viz")
+    return visualize_value(cfg)
 
+
+def visualize_value(cfg: Conf, which_ckpt: str = "latest"):
+    """Visualizes the learned value function.
+
+    Args:
+        cfg: The configuration.
+        which_ckpt: Which checkpoint to load. Options: "latest" or "all".
+            If "latest", then the latest checkpoint is loaded.
+            If "all", then all checkpoints are loaded.
+    """
+    if which_ckpt not in ["latest", "all"]:
+        raise ValueError(f"Invalid which_ckpt: {which_ckpt}")
+
+    input_dir = os.path.join(cfg.output_base_dir, cfg.output_folder)
     dataset = cfg.env.make()
 
     # trainer
@@ -105,28 +112,42 @@ def visualize_value(dict_cfg: DictConfig):
         dataloader_kwargs=dataloader_kwargs,
     )
 
-    ckpts = get_checkpoint_paths(input_dir)
+    all_ckpts = get_checkpoint_paths(input_dir)
+    if not all_ckpts:
+        raise ValueError(f"No checkpoints found in {input_dir}")
 
-    # Load the most recent checkpoint.
-    start_epoch, start_it = max(ckpts.keys())
-    logging.info(
-        f"Load from existing checkpoint: {ckpts[start_epoch, start_it]}"
-    )
-    load(ckpts[start_epoch, start_it], trainer)
-    logging.info(f"Fast forward to epoch={start_epoch} iter={start_it}")
-
-    env = gym.make(cfg.env.name)
-
-    if not os.path.exists(output_viz_dir):
-        os.makedirs(output_viz_dir)
-
-    for goal_xy in env.env.empty_and_goal_locations:
-        # Append zero velocity to the goal.
-        goal = torch.tensor(list(goal_xy) + [0, 0])
-        output_file_path = os.path.join(
-            output_viz_dir, f"goal_{goal_xy[0]},{goal_xy[1]}.png"
+    if which_ckpt == "latest":
+        # Load the most recent checkpoint.
+        start_epoch, start_it = max(all_ckpts.keys())
+        logging.info(
+            f"Load from existing checkpoint: {all_ckpts[start_epoch, start_it]}"
         )
-        plot_value(env, dataset, trainer, goal, output_file_path, device)
+        ckpts_to_load = {
+            (start_epoch, start_it): all_ckpts[start_epoch, start_it]
+        }
+    else:
+        # Load all checkpoints.
+        ckpts_to_load = all_ckpts
+
+    for (start_epoch, start_it), ckpt in ckpts_to_load.items():
+        load(ckpt, trainer)
+        logging.info(f"Fast forward to epoch={start_epoch} iter={start_it}")
+
+        env = gym.make(cfg.env.name)
+
+        output_viz_dir = os.path.join(
+            input_dir, "value_viz", f"epoch={start_epoch}_iter={start_it}"
+        )
+        if not os.path.exists(output_viz_dir):
+            os.makedirs(output_viz_dir)
+
+        for goal_xy in env.env.empty_and_goal_locations:
+            # Append zero velocity to the goal.
+            goal = torch.tensor(list(goal_xy) + [0, 0])
+            output_file_path = os.path.join(
+                output_viz_dir, f"goal_{goal_xy[0]},{goal_xy[1]}.png"
+            )
+            plot_value(env, dataset, trainer, goal, output_file_path, device)
 
 
 def plot_value(
@@ -140,8 +161,6 @@ def plot_value(
     min_x, min_y = -0.5, -0.5
     max_x = maze_width - 0.5
     max_y = maze_height - 0.5
-    # max_x = max(env.env.empty_and_goal_locations, key=lambda xy: xy[0])[0]
-    # max_y = max(env.env.empty_and_goal_locations, key=lambda xy: xy[1])[1]
     x, y = np.meshgrid(
         np.linspace(min_x, max_x, num_cells),
         np.linspace(min_y, max_y, num_cells),
@@ -154,20 +173,16 @@ def plot_value(
     base_observations[:, :, 0] = x
     base_observations[:, :, 1] = y
 
+    goal = torch.broadcast_to(goal[None, None], base_observations.shape)
+
     base_observations = torch.from_numpy(base_observations).to(
         dtype=torch.float32, device=device
     )
     goal = goal.to(dtype=torch.float32, device=device)
     values = (
-        trainer.agent.critics[0](base_observations, goal[None, None])
-        .cpu()
-        .detach()
-        .numpy()
+        trainer.agent.critics[0](base_observations, goal).cpu().detach().numpy()
     )
 
-    # TODO: do this based on the maze layout.
-    # values[0:-5, 5:-5] = 0
-    # values[goal[0], goal[1]] = 100
     fig, ax = plt.subplots(figsize=(8, 8))
     mesh = ax.pcolormesh(x, y, values, cmap="viridis")
 
@@ -198,4 +213,4 @@ if __name__ == "__main__":
     # set up some hydra flags before parsing
     os.environ["HYDRA_FULL_ERROR"] = str(int(FLAGS.DEBUG))
 
-    visualize_value()
+    visualize_value_from_dict_cfg()
