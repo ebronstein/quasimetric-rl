@@ -21,6 +21,25 @@ class TruncationWrapper(gym.Wrapper):
         s, r, done, info = self.env.step(a)
         truncated = info.get("TimeLimit.truncated", False)
         return s, r, done, truncated, info
+
+
+class Maze2dWrapper(gym.Wrapper):
+    """
+    allegedly the maze2d envs don't ever have terminal set to true
+    by default, they have a sparse reward 0/1
+    so we set terminal to true on reward=1
+    
+    The default _max_episode_steps is 300
+    """
+    def __init__(self, env):
+        super().__init__(env)
+        self._max_episode_steps = env._max_episode_steps
+    
+    def step(self, a):
+        s, r, done, info = self.env.step(a)
+        if r == 1:
+            done = True
+        return s, r, done, info
     
 
 def get_d4rl_dataset(env):
@@ -41,6 +60,8 @@ def make_d4rl_env(
     ):
     
     env = gym.make(env_name)
+    if 'maze2d' in env_name:
+        env = Maze2dWrapper(env)
     env = TruncationWrapper(env)
     if save_video:
         env = VideoRecorder(

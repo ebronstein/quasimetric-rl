@@ -13,7 +13,9 @@ class Policy(nn.Module):
     def __init__(self, state_size, device):
         super().__init__()
         action_dim = 2
-        self.policy = MLP(state_size, 2*action_dim, hidden_sizes=(256, 256))
+        self.mean = MLP(state_size, action_dim, hidden_sizes=(256, 256))
+        self.log_std = MLP(state_size, action_dim, hidden_sizes=(256, 256))
+        self.tanh = nn.Tanh()
         self.device = device
         self.to(device)
 
@@ -22,15 +24,16 @@ class Policy(nn.Module):
         if type(obs) == np.ndarray:
             obs = torch.from_numpy(obs).float().to(self.device)
         
-        ac_pred = self.policy(obs)
-        ac_mean, ac_logstd = ac_pred.chunk(2, dim=-1)
+        ac_mean = self.mean(obs)
+        ac_logstd = self.log_std(obs)
 
         return ac_mean, ac_logstd
     
     def get_action(self, obs) -> np.ndarray:
         ac_mean, ac_logstd = self.forward(obs)
         ac_std = torch.exp(ac_logstd)
-        ac_dist = torch.distributions.Normal(loc=ac_mean,scale=ac_std)
+        covariate_std = torch.diag(ac_std)
+        ac_dist = torch.distributions.MultivariateNormal(loc=ac_mean,scale=covariate_std)
         action = ac_dist.sample()
         
         if type(action) == torch.Tensor:

@@ -30,7 +30,7 @@ from .d4rl import make_d4rl_env
 import wandb
 wandb.init(
     project="convex-final", 
-    sync_tensorboard=True,
+    sync_tensorboard=False,
 )
 
 
@@ -74,6 +74,8 @@ def get_checkpoint_dict(dir):
 @pdb_if_DEBUG
 @hydra.main(version_base=None, config_name="config")
 def train_and_eval(dict_cfg: DictConfig):
+    wandb_logger = WandBLogger()
+    
     print("Train called")
     cfg: Conf = Conf.from_DictConfig(dict_cfg)
     writer = cfg.setup_for_experiment()  # checking & setup logging
@@ -172,10 +174,9 @@ def train_and_eval(dict_cfg: DictConfig):
         policy = Policy(len(state1), device)
         optim = torch.optim.Adam(policy.parameters(), lr=1e-3)
         
-        num_total_epochs = 20
-        for epoch in range(tqdm(num_total_epochs)):
-            epoch_desc = f"Train epoch {epoch:05d}/{num_total_epochs:05d}"
-            for it, (data, data_info) in enumerate(trainer.iter_training_data(), total=trainer.num_batches, desc=epoch_desc):
+        num_total_epochs = 40
+        for epoch in tqdm(range(num_total_epochs), total=num_total_epochs):
+            for it, (data, data_info) in enumerate(trainer.iter_training_data()):
                 observations = data.observations
                 actions = data.actions
                 next_observations = data.next_observations
@@ -184,43 +185,51 @@ def train_and_eval(dict_cfg: DictConfig):
                 ac_mean, ac_logstd = policy(observations)
                 ac_std = torch.exp(ac_logstd)
                 ac_dist = torch.distributions.Normal(loc=ac_mean,scale=ac_std)
+                predicted_actions = ac_dist.sample()
                 log_prob = ac_dist.log_prob(actions).sum(dim=-1)
 
-                temperature = 3
+                temperature = 1
                 with torch.no_grad():
-                    v_obs = trainer.agent.critics[0](observations, future_observations)
-                    v_next_obs = trainer.agent.critics[0](next_observations, future_observations)
+                    v_obs_1 = trainer.agent.critics[0](observations, future_observations)
+                    v_obs_2 = trainer.agent.critics[1](observations, future_observations)
+                    v_obs = torch.min(v_obs_1, v_obs_2)
+                    
+                    v_next_obs_1 = trainer.agent.critics[0](next_observations, future_observations)
+                    v_next_obs_2 = trainer.agent.critics[1](next_observations, future_observations)
+                    v_next_obs = torch.min(v_next_obs_1, v_next_obs_2)
+                    
                     adv = v_next_obs - v_obs
                     exp_adv = torch.exp(adv * temperature)
                     exp_adv = torch.min(exp_adv, torch.ones_like(exp_adv) * 100)
-
-                # print("Computed ac_mean", ac_mean[0])
-                # print("Computed ac_logstd", ac_logstd[0])
-                # print("Computed ac_std", ac_std[0])
-                # print("True action", actions[0])
-                # print("Computed log_prob", log_prob[0])
-                # print("Computed v_obs", v_obs[0])
-                # print("Computed v_next_obs", v_next_obs[0])
-                # print("Computed adv", adv[0])
 
                 scaled_log_prob = log_prob * exp_adv
                 loss = -scaled_log_prob.mean()
                 optim.zero_grad()
                 loss.backward()
                 optim.step()
-                print("loss: ", loss.item())
+
+                training_metrics = {
+                    "ac_mean": ac_mean.mean(axis=0),
+                    "ac_logstd": ac_logstd.mean(axis=0),
+                    "ac_std": ac_std.mean(axis=0),
+                    "dataset actions": actions,
+                    "predicted actions": predicted_actions,
+                    "log_prob": log_prob.mean(),
+                    "v_obs": v_obs.mean(),
+                    "v_next_obs": v_next_obs.mean(),
+                    "adv": adv,
+                    "loss": loss.item(),
+                }
+                wandb.log(training_metrics, step=it)
         
             ### save the learned policy ###
             save_policy(policy, cfg.output_dir, epoch, it)
     
     ### evaluate the learned policy ###
-    eval(cfg, state_size=len(state1), device=device)
+    eval(cfg, state_size=len(state1), device=device, wandb_logger=wandb_logger)
 
     
-def eval(cfg, state_size, device):
-    # logger
-    wandb_logger = WandBLogger()
-    
+def eval(cfg, state_size, device, wandb_logger):
     # make env
     env_name = cfg.env.name
     save_video = True
