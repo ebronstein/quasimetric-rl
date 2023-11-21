@@ -16,14 +16,11 @@ import numpy as np
 import torch
 import torch.backends.cudnn
 import torch.multiprocessing
-from scipy.ndimage import zoom
 import matplotlib.patches as patches
 
-import quasimetric_rl
-from quasimetric_rl import utils, pdb_if_DEBUG, FLAGS
+from quasimetric_rl import pdb_if_DEBUG, FLAGS
 from d4rl.pointmaze.maze_model import WALL
 
-from quasimetric_rl.base_conf import BaseConf
 from .trainer import Trainer
 from .main import Conf
 
