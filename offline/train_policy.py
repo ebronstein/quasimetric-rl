@@ -28,10 +28,6 @@ from .eval_utils import evaluate_with_trajectories, load_recorded_video, WandBLo
 from .d4rl import make_d4rl_env
 
 import wandb
-wandb.init(
-    project="convex-final", 
-    sync_tensorboard=False,
-)
 
 
 @utils.singleton
@@ -74,12 +70,19 @@ def get_checkpoint_dict(dir):
 @pdb_if_DEBUG
 @hydra.main(version_base=None, config_name="config")
 def train_and_eval(dict_cfg: DictConfig):
+    wandb.init(
+        project="convex-final", 
+        sync_tensorboard=False,
+    )    
+
     wandb_logger = WandBLogger()
     
     print("Train called")
     cfg: Conf = Conf.from_DictConfig(dict_cfg)
-    writer = cfg.setup_for_experiment()  # checking & setup logging
     cfg.output_dir = os.path.join(cfg.output_base_dir, 'policy')
+    # empty this out_dir 
+    if os.path.exists(cfg.output_dir):
+        os.system(f"rm -rf {cfg.output_dir}")
     
     input_dir = os.path.join(cfg.output_base_dir, 'd4rl_maze2d-umaze-v1/iqe(dim=2048,components=64)_dyn=0.1_2critic_seed=60912')
     print(input_dir)
@@ -169,24 +172,25 @@ def train_and_eval(dict_cfg: DictConfig):
     print("v3: ", v3)
         
     ### learning a policy ###
+    num_total_epochs = 10
+    gamma = 0.99
+    step = 0
+    
     if not cfg.eval_only:
         
         policy = Policy(len(state1), device)
         optim = torch.optim.Adam(policy.parameters(), lr=1e-3)
         
-        num_total_epochs = 40
         for epoch in tqdm(range(num_total_epochs), total=num_total_epochs):
             for it, (data, data_info) in enumerate(trainer.iter_training_data()):
+                step += 1
                 observations = data.observations
-                actions = data.actions
+                actions = data.actions.cpu().numpy()
                 next_observations = data.next_observations
                 future_observations = data.future_observations # goals
+                rewards = data.rewards
 
-                ac_mean, ac_logstd = policy(observations)
-                ac_std = torch.exp(ac_logstd)
-                ac_dist = torch.distributions.Normal(loc=ac_mean,scale=ac_std)
-                predicted_actions = ac_dist.sample()
-                log_prob = ac_dist.log_prob(actions).sum(dim=-1)
+                predicted_actions, log_prob, infos = policy(observations)
 
                 temperature = 1
                 with torch.no_grad():
@@ -198,9 +202,9 @@ def train_and_eval(dict_cfg: DictConfig):
                     v_next_obs_2 = trainer.agent.critics[1](next_observations, future_observations)
                     v_next_obs = torch.min(v_next_obs_1, v_next_obs_2)
                     
-                    adv = v_next_obs - v_obs
-                    exp_adv = torch.exp(adv * temperature)
-                    exp_adv = torch.min(exp_adv, torch.ones_like(exp_adv) * 100)
+                    adv = rewards + gamma * v_next_obs - v_obs
+                    exp_adv = torch.exp(adv / temperature)
+                    exp_adv = torch.clip(exp_adv, max=100)
 
                 scaled_log_prob = log_prob * exp_adv
                 loss = -scaled_log_prob.mean()
@@ -209,9 +213,6 @@ def train_and_eval(dict_cfg: DictConfig):
                 optim.step()
 
                 training_metrics = {
-                    "ac_mean": ac_mean.mean(axis=0),
-                    "ac_logstd": ac_logstd.mean(axis=0),
-                    "ac_std": ac_std.mean(axis=0),
                     "dataset actions": actions,
                     "predicted actions": predicted_actions,
                     "log_prob": log_prob.mean(),
@@ -219,17 +220,19 @@ def train_and_eval(dict_cfg: DictConfig):
                     "v_next_obs": v_next_obs.mean(),
                     "adv": adv,
                     "loss": loss.item(),
+                    "behavior mse": np.square(predicted_actions - actions).mean(),
+                    **infos,
                 }
-                wandb.log(training_metrics, step=it)
+                wandb.log(training_metrics, step=step)
         
             ### save the learned policy ###
             save_policy(policy, cfg.output_dir, epoch, it)
     
     ### evaluate the learned policy ###
-    eval(cfg, state_size=len(state1), device=device, wandb_logger=wandb_logger)
+    eval(cfg, state_size=len(state1), device=device, wandb_logger=wandb_logger, logger_start_step=step)
 
     
-def eval(cfg, state_size, device, wandb_logger):
+def eval(cfg, state_size, device, wandb_logger, logger_start_step=0):
     # make env
     env_name = cfg.env.name
     save_video = True
@@ -260,7 +263,7 @@ def eval(cfg, state_size, device, wandb_logger):
                 num_videos_per_row=4,
             )
         stats, trajs = evaluate_with_trajectories(
-            policy_fn=policy.get_action,
+            policy_fn=lambda s: policy.forward(s)[0],
             env=env,
             num_episodes=10,
         )
@@ -271,12 +274,13 @@ def eval(cfg, state_size, device, wandb_logger):
         metrics['average_normalizd_return'] = np.mean(
             [env.get_normalized_score(np.sum(t['reward'])) for t in trajs]
         )
+        metrics['pred actions'] = np.concatenate([t['action'] for t in trajs])
         print(epoch, metrics)
-        wandb_logger.log({"evaluation": metrics}, step=epoch)
+        wandb_logger.log({"evaluation": metrics}, step=logger_start_step+epoch)
         
         if save_video:
             eval_video = load_recorded_video(video_path=env.current_save_path)
-            wandb_logger.log({"evaluation/video": eval_video}, step=epoch)
+            wandb_logger.log({"evaluation/video": eval_video}, step=logger_start_step+epoch)
 
 
 if __name__ == '__main__':
