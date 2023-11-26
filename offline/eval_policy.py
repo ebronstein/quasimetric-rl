@@ -10,14 +10,6 @@ from quasimetric_rl.data import Dataset
 from quasimetric_rl.modules import QRLAgent, QRLConf
 
 import glob
-import attrs
-import logging
-import time
-
-import hydra
-import hydra.types
-import hydra.core.config_store
-from omegaconf import DictConfig
 
 from tqdm.auto import tqdm
 import numpy as np
@@ -25,22 +17,46 @@ import torch
 import torch.backends.cudnn
 import torch.multiprocessing
 
-import quasimetric_rl
-from quasimetric_rl import utils, pdb_if_DEBUG, FLAGS
-from quasimetric_rl.base_conf import BaseConf
 
-from .trainer import Trainer
-from .policy import Policy, save_policy, load_policy
 from .eval_utils import (
     evaluate_with_trajectories,
     load_recorded_video,
-    save_metrics_to_csv,
     WandBLogger,
 )
-from .d4rl import Maze2dWrapper, TruncationWrapper, make_d4rl_env
-from .main import Conf
+from .d4rl import make_d4rl_env
 
 import wandb
+
+import argparse
+import os
+import re
+import yaml
+from typing import List
+
+from omegaconf import OmegaConf, SCMode
+
+from .main import Conf
+
+
+def _is_exp_dir(path: str) -> bool:
+    return os.path.isdir(path) and os.path.exists(
+        os.path.join(path, "config.yaml")
+    )
+
+
+def _get_exp_paths(paths: List[str]) -> List[str]:
+    # Walk through the paths and find the experiment directories.
+    exp_paths = []
+    for path in paths:
+        if _is_exp_dir(path):
+            exp_paths.append(path)
+        else:
+            for root, dirs, _ in os.walk(path):
+                for dir in dirs:
+                    subdir = os.path.join(root, dir)
+                    if _is_exp_dir(subdir):
+                        exp_paths.append(subdir)
+    return exp_paths
 
 
 def _get_checkpoint_dict(dir: str, verbose: bool = True):
@@ -60,6 +76,42 @@ def _get_checkpoint_dict(dir: str, verbose: bool = True):
     return ckpts
 
 
+def main(
+    paths: List[str],
+    regex: str,
+    num_episodes: int,
+    goal_type: str,
+    save_video: bool,
+    wandb_project: str,
+    dry_run: bool,
+):
+    if goal_type != "fixed":
+        raise NotImplementedError()
+
+    exp_paths = _get_exp_paths(paths)
+    if not exp_paths:
+        raise ValueError(f"No experiment directories found in {paths}")
+
+    # Filter exp_paths by regex.
+    if regex:
+        regex = re.compile(regex)
+        exp_paths = list(filter(regex.search, exp_paths))
+        if not exp_paths:
+            raise ValueError(
+                f"No experiment directories found in {paths} matching {regex}"
+            )
+
+    if dry_run:
+        print("Dry-run mode. Will not save anything.")
+        print("Experiment directories:")
+        for exp_dir in exp_paths:
+            print(f"  {exp_dir}")
+        return
+
+    for exp_dir in exp_paths:
+        eval(exp_dir, num_episodes, goal_type, save_video, wandb_project)
+
+
 def eval(
     expr_dir: str,
     num_episodes: int,
@@ -69,7 +121,8 @@ def eval(
 ):
     config_path = os.path.join(expr_dir, "config.yaml")
     if not os.path.exists(config_path):
-        raise ValueError(f"config file not found: {config_path}")
+        print(f"config file not found: {config_path}. Skipping.")
+        return
 
     with open(config_path) as f:
         conf = OmegaConf.create(yaml.safe_load(f))
@@ -116,7 +169,8 @@ def eval(
         agent.load_state_dict(torch.load(checkpoint)["agent"])
         actor = agent.actor
         if actor is None:
-            raise ValueError("Actor is None")
+            print(f"Actor is None for checkpoint {checkpoint}. Skipping.")
+            continue
 
         actor.eval()
 
@@ -189,11 +243,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
-        "-e",
-        "--experiment_dir",
-        type=str,
-        required=True,
-        help="Path to the experiment directory.",
+        "paths",
+        nargs="+",
+        help="Paths to the experiment directories. Can be individual experiments or directories containing multiple experiments.",
+    )
+    parser.add_argument(
+        "-r",
+        "--regex",
+        default="",
+        help="Regex pattern for experiment directories.",
     )
     parser.add_argument(
         "-n",
@@ -222,13 +280,29 @@ if __name__ == "__main__":
         action="store_true",
         help="Save video.",
     )
+    parser.add_argument(
+        "-d",
+        "--dry_run",
+        action="store_true",
+        help="Dry run.",
+    )
 
     args = parser.parse_args()
 
-    expr_dir = args.experiment_dir
+    paths = args.paths
+    regex = args.regex
     num_episodes = args.num_episodes
     goal_type = args.goal
     save_video = args.save_video
     wandb_project = args.wandb_project
+    dry_run = args.dry_run
 
-    eval(expr_dir, num_episodes, goal_type, save_video, wandb_project)
+    main(
+        paths,
+        regex,
+        num_episodes,
+        goal_type,
+        save_video,
+        wandb_project,
+        dry_run,
+    )
