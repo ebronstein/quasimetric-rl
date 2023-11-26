@@ -1,3 +1,4 @@
+import csv
 import os
 from collections import defaultdict
 from typing import Dict, List
@@ -5,7 +6,12 @@ from typing import Dict, List
 import gym
 import imageio
 import numpy as np
-import wandb
+from tqdm import tqdm
+
+try:
+    import wandb
+except ImportError:
+    print("wandb is not installed.")
 
 
 def flatten(d, parent_key="", sep="."):
@@ -25,18 +31,23 @@ def add_to(dict_of_lists, single_dict):
 
 
 def evaluate_with_trajectories(
-    policy_fn, env: gym.Env, num_episodes: int
+    policy_fn, env: gym.Env, num_episodes: int, goal_conditioned: bool = False
 ) -> Dict[str, float]:
     trajectories = []
     stats = defaultdict(list)
 
-    for _ in range(num_episodes):
+    for _ in tqdm(range(num_episodes)):
         trajectory = defaultdict(list)
         observation, info = env.reset()
+        goal = observation.copy()
+        goal[:2] = env.get_target()
         add_to(stats, flatten(info))
         done = False
         while not done:
-            action = policy_fn(observation)
+            if goal_conditioned:
+                action = policy_fn(observation, goal)
+            else:
+                action = policy_fn(observation)
             next_observation, r, terminated, truncated, info = env.step(action)
             done = terminated or truncated
             transition = dict(
@@ -103,7 +114,9 @@ def compose_frames(
 
         frames_to_save.append(frame_t)
         t += 1
-        end_of_all_epidoes = all([len(all_frames[i]) <= t for i in range(num_episodes)])
+        end_of_all_epidoes = all(
+            [len(all_frames[i]) <= t for i in range(num_episodes)]
+        )
 
     return frames_to_save
 
@@ -141,7 +154,9 @@ class VideoRecorder(gym.Wrapper):
         # self.all_save_paths = None
         self.current_save_path = None
 
-    def start_recording(self, num_episodes: int = None, num_videos_per_row: int = None):
+    def start_recording(
+        self, num_episodes: int = None, num_videos_per_row: int = None
+    ):
         if num_videos_per_row is not None and num_episodes is not None:
             assert num_episodes >= num_videos_per_row
 
@@ -155,9 +170,10 @@ class VideoRecorder(gym.Wrapper):
         self.num_record_episodes = None
 
     def step(self, action: np.ndarray):  # NOQA
-
         if self.num_record_episodes is None or self.num_record_episodes == 0:
-            observation, reward, terminated, truncated, info = self.env.step(action)
+            observation, reward, terminated, truncated, info = self.env.step(
+                action
+            )
 
         elif self.num_record_episodes > 0:
             # frame = self.env.render(
@@ -175,12 +191,16 @@ class VideoRecorder(gym.Wrapper):
 
             self.frames.append(frame.astype(np.uint8))
 
-            observation, reward, terminated, truncated, info = self.env.step(action)
+            observation, reward, terminated, truncated, info = self.env.step(
+                action
+            )
 
             if terminated or truncated:
                 if self.goal_conditioned:
                     frames = [
-                        np.concatenate([self.env.current_goal["image"], frame], axis=0)
+                        np.concatenate(
+                            [self.env.current_goal["image"], frame], axis=0
+                        )
                         for frame in self.frames
                     ]
                 else:
@@ -200,8 +220,12 @@ class VideoRecorder(gym.Wrapper):
                 filename = "%08d.mp4" % (self.num_videos)
                 if self.save_prefix is not None and self.save_prefix != "":
                     filename = f"{self.save_prefix}_{filename}"
-                self.current_save_path = os.path.join(self.save_folder, filename)
-                os.makedirs(os.path.dirname(self.current_save_path), exist_ok=True)
+                self.current_save_path = os.path.join(
+                    self.save_folder, filename
+                )
+                os.makedirs(
+                    os.path.dirname(self.current_save_path), exist_ok=True
+                )
 
                 with open(self.current_save_path, "wb") as f:
                     imageio.mimsave(f, frames_to_save, "MP4", fps=self.fps)
