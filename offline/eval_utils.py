@@ -1,4 +1,4 @@
-import csv
+import json
 import os
 from collections import defaultdict
 from typing import Dict, List
@@ -268,3 +268,22 @@ class WandBLogger(object):
         data_flat = _recursive_flatten_dict(data)
         data = {k: v for k, v in zip(*data_flat)}
         wandb.log(data, step=step)
+
+
+def save_metrics_to_json(metrics_dict, filename):
+    """
+    Save a dictionary of scalar metrics to a JSON file.
+
+    Args:
+    - metrics_dict (dict): A dictionary where keys are metric names and values are NumPy scalar values.
+    - filename (str): The name of the file to save the metrics.
+    """
+    # Convert NumPy scalars to Python native data types
+    converted_dict = {
+        k: v.item() if isinstance(v, np.generic) else v
+        for k, v in metrics_dict.items()
+        if np.isscalar(v)
+    }
+
+    with open(filename, "w") as file:
+        json.dump(converted_dict, file, indent=4)

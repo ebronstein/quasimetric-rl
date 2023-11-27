@@ -21,6 +21,7 @@ import torch.multiprocessing
 from .eval_utils import (
     evaluate_with_trajectories,
     load_recorded_video,
+    save_metrics_to_json,
     WandBLogger,
 )
 from .d4rl import make_d4rl_env
@@ -36,6 +37,7 @@ from typing import List
 from omegaconf import OmegaConf, SCMode
 
 from .main import Conf
+from quasimetric_rl.base_conf import get_output_folder
 
 
 def _is_exp_dir(path: str) -> bool:
@@ -79,8 +81,10 @@ def _get_checkpoint_dict(dir: str, verbose: bool = True):
 def main(
     paths: List[str],
     regex: str,
+    which_checkpoint: str,
     num_episodes: int,
     goal_type: str,
+    use_wandb: bool,
     save_video: bool,
     wandb_project: str,
     dry_run: bool,
@@ -109,13 +113,23 @@ def main(
         return
 
     for exp_dir in exp_paths:
-        eval(exp_dir, num_episodes, goal_type, save_video, wandb_project)
+        eval(
+            exp_dir,
+            which_checkpoint,
+            num_episodes,
+            goal_type,
+            use_wandb,
+            save_video,
+            wandb_project,
+        )
 
 
 def eval(
     expr_dir: str,
+    which_checkpoint: str,
     num_episodes: int,
     goal_type: str,
+    use_wandb: bool,
     save_video: bool,
     wandb_project: str,
 ):
@@ -127,12 +141,18 @@ def eval(
     with open(config_path) as f:
         conf = OmegaConf.create(yaml.safe_load(f))
 
-    wandb.init(
-        project=wandb_project,
-        sync_tensorboard=False,
-    )
-
-    wandb_logger = WandBLogger()
+    if use_wandb:
+        output_folder = get_output_folder(conf)
+        config_dict = OmegaConf.to_container(
+            conf, resolve=True, enum_to_str=True
+        )
+        wandb.init(
+            project=wandb_project,
+            name=output_folder,
+            config=config_dict,
+            sync_tensorboard=False,
+        )
+        wandb_logger = WandBLogger()
 
     # 1. How to create env
     dataset: Dataset = Dataset.Conf(
@@ -161,6 +181,9 @@ def eval(
     agent = agent.to(device_str)
 
     ckpts = _get_checkpoint_dict(expr_dir)
+    if which_checkpoint == "last":
+        epoch, it = max(ckpts.keys())
+        ckpts = {(epoch, it): ckpts[epoch, it]}
 
     for (epoch, it), checkpoint in tqdm(ckpts.items()):
         print("Evaluating epoch", epoch, "iter", it)
@@ -219,21 +242,26 @@ def eval(
             [len(t["reward"]) for t in trajs]
         )
         metrics["pred actions"] = np.concatenate([t["action"] for t in trajs])
-        wandb_logger.log({"evaluation": metrics}, step=epoch)
 
-        if save_video:
-            eval_video = load_recorded_video(video_path=env.current_save_path)
-            wandb_logger.log({"evaluation/video": eval_video}, step=epoch)
+        if use_wandb:
+            wandb_logger.log({"evaluation": metrics}, step=epoch)
 
-        # TODO
+            if save_video:
+                eval_video = load_recorded_video(
+                    video_path=env.current_save_path
+                )
+                wandb_logger.log({"evaluation/video": eval_video}, step=epoch)
+
         # Save metrics to file
-        # eval_dir = os.path.join(expr_dir, "eval", f"goal_{goal_type}")
-        # if not os.path.exists(eval_dir):
-        #     os.makedirs(eval_dir)
-        # metrics_path = os.path.join(eval_dir, f"metrics_{epoch}_{it}.csv")
-        # save_metrics_to_csv(
-        #     metrics, metrics_path, exclude_keys=["pred actions"]
-        # )
+        eval_dir = os.path.join(expr_dir, "eval", f"goal_{goal_type}")
+        if not os.path.exists(eval_dir):
+            os.makedirs(eval_dir)
+        metrics_path = os.path.join(eval_dir, f"metrics_{epoch}_{it}.json")
+        scalar_metrics = {k: v for k, v in metrics.items() if np.isscalar(v)}
+        save_metrics_to_json(scalar_metrics, metrics_path)
+
+    if use_wandb:
+        wandb.finish()
 
 
 if __name__ == "__main__":
@@ -252,6 +280,13 @@ if __name__ == "__main__":
         "--regex",
         default="",
         help="Regex pattern for experiment directories.",
+    )
+    parser.add_argument(
+        "-c",
+        "--checkpoint",
+        choices=["last", "all"],
+        default="last",
+        help="Which checkpoint to evaluate. If 'last', evaluate the last checkpoint. If 'all', evaluate all checkpoints.",
     )
     parser.add_argument(
         "-n",
@@ -275,6 +310,9 @@ if __name__ == "__main__":
         help="wandb project name.",
     )
     parser.add_argument(
+        "-w", "--use_wandb", action="store_true", help="Use wandb for logging."
+    )
+    parser.add_argument(
         "-v",
         "--save_video",
         action="store_true",
@@ -291,17 +329,26 @@ if __name__ == "__main__":
 
     paths = args.paths
     regex = args.regex
+    which_checkpoint = args.checkpoint
     num_episodes = args.num_episodes
     goal_type = args.goal
+    use_wandb = args.use_wandb
     save_video = args.save_video
     wandb_project = args.wandb_project
     dry_run = args.dry_run
 
+    if save_video and not use_wandb:
+        raise ValueError(
+            "Must use wandb if saving video or logging to a wandb project."
+        )
+
     main(
         paths,
         regex,
+        which_checkpoint,
         num_episodes,
         goal_type,
+        use_wandb,
         save_video,
         wandb_project,
         dry_run,
