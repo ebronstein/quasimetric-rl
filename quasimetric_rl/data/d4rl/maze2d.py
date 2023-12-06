@@ -18,7 +18,11 @@ if TYPE_CHECKING:
 
 
 
-def preprocess_maze2d_fix(env: 'd4rl.pointmaze.MazeEnv', dataset: Mapping[str, np.ndarray]):
+def preprocess_maze2d_fix(
+    env: 'd4rl.pointmaze.MazeEnv', 
+    dataset: Mapping[str, np.ndarray],
+    filter_func: Optional[Callable] = None,
+    ):
     ## In generation, controller is run until reached goal, which is
     ## continuously set.
     ##
@@ -40,7 +44,11 @@ def preprocess_maze2d_fix(env: 'd4rl.pointmaze.MazeEnv', dataset: Mapping[str, n
     ## What a mess... This fixes that too.
     ##
     ## NB that this is different from diffuser code!
-
+  
+    # filer the dataset if needed
+    if filter_func is not None:
+        dataset = filter_func(dataset)
+    
     assert not np.any(dataset['terminals'])
     dataset['next_observations'] = dataset['observations'][1:]
 
@@ -81,8 +89,27 @@ def preprocess_maze2d_fix(env: 'd4rl.pointmaze.MazeEnv', dataset: Mapping[str, n
     return dataset
 
 
+def filter_maze2d_positive_x_velocity(dataset):
+    """
+    filter the maze2d dataset to only include episodes where the agent moves
+    in the positive x direction
+    The observation space is 4-dimensional (x, y, vx, vy)
+    """
+    positive_x_indices = np.where(dataset['observations'][:, 2] > 0)[0]
+    dataset = {k: dataset[k][positive_x_indices] for k in dataset}
+    return dataset
+
 
 def load_episodes_maze2d(name):
+
+    # filter dataset if necessary
+    # currently we only support filtering by positive x velocity
+    if 'filtered' in name:
+        name = name.replace('-filtered', '')
+        filter_func = filter_maze2d_positive_x_velocity
+    else: 
+        filter_func = None
+        
     env = load_environment(name)
     yield from convert_dict_to_EpisodeData_iter(
         sequence_dataset(
@@ -90,6 +117,7 @@ def load_episodes_maze2d(name):
             preprocess_maze2d_fix(
                 env,
                 env.get_dataset(),
+                filter_func=filter_func,
             ),
         ),
     )
@@ -109,6 +137,9 @@ for name in [
     'maze2d-umaze-v1',
     'maze2d-medium-v1',
     'maze2d-large-v1',
+    'maze2d-umaze-filtered-v1',
+    'maze2d-medium-filtered-v1',
+    'maze2d-large-filtered-v1',
     'halfcheetah-expert-v2',
     'halfcheetah-random-v2',
     'halfcheetah-medium-v2',
