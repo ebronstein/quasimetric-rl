@@ -66,8 +66,9 @@ def main(args):
             OmegaConf.merge(OmegaConf.structured(Conf()), conf),
             structured_config_mode=SCMode.INSTANTIATE,  # create the object
         )
+        conf.set_output_folder()
 
-        visualize_value(conf, which_ckpt=ckpt)
+        visualize_value(conf, exp_dir, which_ckpt=ckpt)
 
 
 if __name__ == "__main__":

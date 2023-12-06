@@ -29,6 +29,34 @@ from torch.utils.tensorboard import SummaryWriter
 
 from . import data, modules, utils
 
+def get_output_folder(cfg) -> None:
+    specs = [
+        cfg.agent.quasimetric_critic.model.quasimetric_model.quasimetric_head_spec,
+        f'dyn={cfg.agent.quasimetric_critic.losses.latent_dynamics.weight:g}',
+    ]
+    if cfg.agent.num_critics > 1:
+        specs.append(f'{cfg.agent.num_critics}critic')
+    if cfg.agent.actor is not None:
+        aspecs = []
+        if cfg.agent.actor.losses.min_dist.add_goal_as_future_state:
+            aspecs.append('goal=Rand+Future')
+        else:
+            aspecs.append('goal=Rand')
+        if cfg.agent.actor.losses.min_dist.adaptive_entropy_regularizer:
+            aspecs.append('ent')
+        if cfg.agent.actor.losses.behavior_cloning.weight > 0:
+            aspecs.append(f'BC={cfg.agent.actor.losses.behavior_cloning.weight:g}')
+        specs.append('actor(' + ','.join(aspecs) + ')')
+    specs.append(
+        f'seed={cfg.seed}',
+    )
+    if cfg.output_folder_suffix is not None:
+        specs.append(cfg.output_folder_suffix)
+    return os.path.join(
+        f'{cfg.env.kind}_{cfg.env.name}',
+        '_'.join(specs),
+    )
+
 
 @attrs.define(kw_only=True, auto_attribs=True)
 class DeviceConfig:
@@ -99,32 +127,7 @@ class BaseConf(abc.ABC):
         return OmegaConf.to_container(cfg, structured_config_mode=SCMode.INSTANTIATE)
 
     def set_output_folder(self) -> None:
-        specs = [
-            self.agent.quasimetric_critic.model.quasimetric_model.quasimetric_head_spec,
-            f'dyn={self.agent.quasimetric_critic.losses.latent_dynamics.weight:g}',
-        ]
-        if self.agent.num_critics > 1:
-            specs.append(f'{self.agent.num_critics}critic')
-        if self.agent.actor is not None:
-            aspecs = []
-            if self.agent.actor.losses.min_dist.add_goal_as_future_state:
-                aspecs.append('goal=Rand+Future')
-            else:
-                aspecs.append('goal=Rand')
-            if self.agent.actor.losses.min_dist.adaptive_entropy_regularizer:
-                aspecs.append('ent')
-            if self.agent.actor.losses.behavior_cloning.weight > 0:
-                aspecs.append(f'BC={self.agent.actor.losses.behavior_cloning.weight:g}')
-            specs.append('actor(' + ','.join(aspecs) + ')')
-        specs.append(
-            f'seed={self.seed}',
-        )
-        if self.output_folder_suffix is not None:
-            specs.append(self.output_folder_suffix)
-        self.output_folder = os.path.join(
-            f'{self.env.kind}_{self.env.name}',
-            '_'.join(specs),
-        )
+        self.output_folder = get_output_folder(self)
 
     def setup_for_experiment(self) -> SummaryWriter:
         r"""

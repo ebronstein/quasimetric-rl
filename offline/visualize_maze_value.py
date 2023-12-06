@@ -58,7 +58,7 @@ def visualize_value_from_dict_cfg(dict_cfg: DictConfig):
     return visualize_value(cfg)
 
 
-def visualize_value(cfg: Conf, which_ckpt: str = "latest"):
+def visualize_value(cfg: Conf, input_dir: str, which_ckpt: str = "latest"):
     """Visualizes the learned value function.
 
     Args:
@@ -70,8 +70,7 @@ def visualize_value(cfg: Conf, which_ckpt: str = "latest"):
     if which_ckpt not in ["latest", "all"]:
         raise ValueError(f"Invalid which_ckpt: {which_ckpt}")
 
-    input_dir = os.path.join(cfg.output_base_dir, cfg.output_folder)
-    dataset = cfg.env.make()
+    dataset = cfg.env.make(dummy=True)
 
     # trainer
     dataloader_kwargs = dict(shuffle=True, drop_last=True)
@@ -161,9 +160,7 @@ def plot_value(
         np.linspace(min_y, max_y, num_cells),
     )
 
-    base_observation = np.copy(
-        dataset.get_observations(0).cpu().detach().numpy()
-    )
+    base_observation = np.zeros(4)
     base_observations = np.tile(base_observation, (x.shape[0], x.shape[1], 1))
     base_observations[:, :, 0] = x
     base_observations[:, :, 1] = y
