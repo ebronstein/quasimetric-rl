@@ -22,6 +22,7 @@ Software dependencies: see `requirements.txt`.
   - `main.py`: entry point for online experiments.
 - `offline/`: offline setting.
   - `main.py` entry point for training the offline experiments.
+  - `eval_policy.py`: evaluates the learned policy.
   - `check_value_func.py`: computes value function errors.
   - `visualize_maze_value.py` and `visualize_values_for_maze_exps.py`: visualizes heatmap of value function for maze environments.
 - `plots.ipynb`: Jupyter notebook to generate plots/figures.
