@@ -1,3 +1,4 @@
+import glob
 import json
 import os
 from collections import defaultdict
@@ -287,3 +288,41 @@ def save_metrics_to_json(metrics_dict, filename):
 
     with open(filename, "w") as file:
         json.dump(converted_dict, file, indent=4)
+
+
+def _is_exp_dir(path: str) -> bool:
+    return os.path.isdir(path) and os.path.exists(
+        os.path.join(path, "config.yaml")
+    )
+
+
+def get_exp_paths(paths: List[str]) -> List[str]:
+    # Walk through the paths and find the experiment directories.
+    exp_paths = []
+    for path in paths:
+        if _is_exp_dir(path):
+            exp_paths.append(path)
+        else:
+            for root, dirs, _ in os.walk(path):
+                for dir in dirs:
+                    subdir = os.path.join(root, dir)
+                    if _is_exp_dir(subdir):
+                        exp_paths.append(subdir)
+    return exp_paths
+
+
+def get_checkpoint_dict(dir: str, verbose: bool = True):
+    ckpts = {}  # (epoch, iter) -> path
+    ckpt_paths = glob.glob(os.path.join(glob.escape(dir), "checkpoint_*.pth"))
+    if verbose:
+        print(f"loading checkpoints from {ckpt_paths}")
+
+    for ckpt in sorted(ckpt_paths):
+        epoch, it = os.path.basename(ckpt).rsplit(".", 1)[0].split("_")[1:3]
+        epoch, it = int(epoch), int(it)
+        ckpts[epoch, it] = ckpt
+
+    if verbose:
+        print("ckpts: ", ckpts)
+
+    return ckpts
