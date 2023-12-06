@@ -27,4 +27,5 @@ Software dependencies: see `requirements.txt`.
   - `visualize_maze_value.py` and `visualize_values_for_maze_exps.py`: visualizes heatmap of value function for maze environments.
 - `plots.ipynb`: Jupyter notebook to generate plots/figures.
 - `fig`: figures.
+- `scripts`: convenience scripts (e.g., for training online/offline experiments).
 - `wandb`: Results exported from Wandb.
