@@ -2,10 +2,10 @@
 
 **Authors**
 - Eli Bronstein (26086997)
-- Kevin Frans
-- Toby Kreiman
+- Kevin Frans (3033673452)
+- Toby Kreiman (3034607850)
 - Tara Sadjadpour (3032788592)
-- Zhiyuan Zhou
+- Zhiyuan (Paul) Zhou (3034663321)
 
 ## Requirements
 
