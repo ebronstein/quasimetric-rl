@@ -4,7 +4,7 @@
 - Eli Bronstein (26086997)
 - Kevin Frans
 - Toby Kreiman
-- Tara Sadjadpour
+- Tara Sadjadpour (3032788592)
 - Zhiyuan Zhou
 
 ## Requirements
