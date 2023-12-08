@@ -29,3 +29,19 @@ Software dependencies: see `requirements.txt`.
 - `fig`: figures.
 - `scripts`: convenience scripts (e.g., for training online/offline experiments).
 - `wandb`: Results exported from Wandb.
+
+## Running experiments
+Train a value function 
+```
+bash offline/run_train_offline.sh
+```
+
+Extract a policy from a value function
+```
+bash offline/run_policy.sh
+```
+
+Evaluate a policy
+```
+bash offline/eval_policy.sh
+```
