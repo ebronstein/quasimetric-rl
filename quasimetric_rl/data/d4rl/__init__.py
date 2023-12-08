@@ -70,6 +70,10 @@ def load_environment(name: Union[str, gym.Env]) -> 'OfflineEnv':
         ## name is already an environment
         return name
     with suppress_output():
+        
+        # hack to add the filtered envs
+        name = name.replace('-filtered', '')
+        
         wrapped_env: gym.Wrapper = gym.make(name)
     env: 'OfflineEnv' = wrapped_env.unwrapped
     env.max_episode_steps = wrapped_env._max_episode_steps
